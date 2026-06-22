@@ -21,3 +21,4 @@ downloads/
 .DS_Store
 .idea/
 
+scripts/allTransmissionCodes.json
