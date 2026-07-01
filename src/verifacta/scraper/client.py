@@ -112,8 +112,12 @@ class RegistraduriaClient:
         Descarga un PDF dado su path relativo.
 
         file_path: e.g. "01/280/03/02/001/PRE/54cec...pdf"
+        Lanza ValueError si el CDN devuelve HTML en vez del PDF.
         """
         url = f"{ASSETS_BASE}/pdf/{file_path}"
         resp = await self._http.get(url, params={"uuid": str(uuid.uuid4())})
         resp.raise_for_status()
-        return resp.content
+        content = resp.content
+        if not content.startswith(b"%PDF"):
+            raise ValueError(f"CDN devolvió HTML en vez de PDF — posible bloqueo de Akamai ({file_path})")
+        return content

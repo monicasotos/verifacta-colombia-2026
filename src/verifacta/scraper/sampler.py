@@ -1,68 +1,98 @@
-a"""
-Muestreo estratificado de actas E14 para análisis.
-
-Estrategia: top-N municipios por número de mesas (proxy de población),
-muestra proporcional aleatoria dentro de cada uno.
 """
+Muestreo estratificado de actas E14 descargadas para análisis.
+
+Estrategia: proporcional al número de mesas por municipio dentro de los
+departamentos de interés. Los municipios más grandes (más mesas) aportan
+más actas a la muestra.
+"""
+import json
 import random
-from collections import Counter, defaultdict
+import re
+from collections import defaultdict
+from pathlib import Path
 
 
-def build_sample(
-    nodes: list[dict],
+def _muni_key(folder_name: str) -> str:
+    """Extrae '{DEPT}_{MUNI}' del nombre de carpeta '{DEPT}_{MUNI}_Z{z}_P{p}_M{m}'."""
+    # Busca el patrón _Z seguido de dígitos para saber dónde termina el prefijo
+    m = re.search(r"_Z\d+_P\d+_M\d+$", folder_name)
+    if m:
+        return folder_name[: m.start()]
+    return folder_name
+
+
+def _dept_name(folder_name: str) -> str:
+    """Extrae el nombre del departamento (primer segmento antes del código de municipio)."""
+    # El código de municipio es siempre numérico; el nombre del dpto puede tener espacios/puntos
+    parts = folder_name.split("_")
+    # Busca el primer segmento que sea puramente numérico — ese es el muni code
+    for i, part in enumerate(parts):
+        if part.isdigit():
+            return "_".join(parts[:i])
+    return parts[0]
+
+
+def build_sample_from_downloads(
+    downloads_dir: Path,
+    dept_names: list[str],
     n: int,
-    top_munis: int = 100,
     seed: int | None = 42,
-) -> list[dict]:
+) -> list[Path]:
     """
-    Retorna una muestra de n nodos priorizando los municipios más grandes.
+    Selecciona una muestra proporcional de PDFs ya descargados.
 
     Args:
-        nodes: Lista de nodos status11 del allTransmissionCodes.json.
-        n: Tamaño de la muestra.
-        top_munis: Cuántos municipios más grandes incluir (por número de mesas).
-        seed: Semilla para reproducibilidad. None = aleatorio puro.
+        downloads_dir: Carpeta raíz de descargas.
+        dept_names: Lista de nombres de departamento a incluir (ej: ["ANTIOQUIA", "TOLIMA"]).
+        n: Tamaño total de la muestra.
+        seed: Semilla para reproducibilidad.
 
     Returns:
-        Lista de n nodos seleccionados proporcionalmente.
+        Lista de rutas a PDFs seleccionados.
     """
     rng = random.Random(seed)
+    dept_set = {d.upper() for d in dept_names}
 
-    # Agrupar nodos por (dept, municipio)
-    by_muni: dict[tuple, list[dict]] = defaultdict(list)
-    for node in nodes:
-        key = (node["idDepartmentCode"], node["municipalityCode"])
-        by_muni[key].append(node)
+    # Agrupar PDFs por municipio (clave: DEPT_MUNI)
+    by_muni: dict[str, list[Path]] = defaultdict(list)
+    for folder in downloads_dir.iterdir():
+        if not folder.is_dir():
+            continue
+        dept = _dept_name(folder.name)
+        if dept not in dept_set:
+            continue
+        key = _muni_key(folder.name)
+        by_muni[key].extend(folder.glob("*.pdf"))
 
-    # Seleccionar top-N municipios por número de mesas
-    muni_sizes = Counter({k: len(v) for k, v in by_muni.items()})
-    selected_munis = {k for k, _ in muni_sizes.most_common(top_munis)}
+    if not by_muni:
+        return []
 
-    # Pool filtrado
-    pool: dict[tuple, list[dict]] = {k: v for k, v in by_muni.items() if k in selected_munis}
-    total_in_pool = sum(len(v) for v in pool.values())
+    total_pool = sum(len(v) for v in by_muni.values())
+    if n >= total_pool:
+        all_pdfs = [p for pdfs in by_muni.values() for p in pdfs]
+        rng.shuffle(all_pdfs)
+        return all_pdfs
 
-    if n >= total_in_pool:
-        # Piden más de lo que hay — devolver todo el pool mezclado
-        all_nodes = [node for nodes_list in pool.values() for node in nodes_list]
-        rng.shuffle(all_nodes)
-        return all_nodes
-
-    # Asignar cuotas proporcionales al tamaño de cada municipio
-    sample: list[dict] = []
+    # Cuotas proporcionales al tamaño de cada municipio
+    munis = sorted(by_muni.keys(), key=lambda k: -len(by_muni[k]))
+    sample: list[Path] = []
     remaining = n
-    munis_sorted = sorted(pool.keys(), key=lambda k: -len(pool[k]))
+    pool_left = total_pool
 
-    for i, key in enumerate(munis_sorted):
-        muni_nodes = pool[key]
-        munis_left = len(munis_sorted) - i
-        # Cuota proporcional, garantizando al menos 1 por municipio
-        quota = max(1, round(remaining * len(muni_nodes) / total_in_pool))
-        quota = min(quota, remaining - (munis_left - 1), len(muni_nodes))
-        sample.extend(rng.sample(muni_nodes, quota))
-        remaining -= quota
-        total_in_pool -= len(muni_nodes)
+    for key in munis:
         if remaining <= 0:
             break
+        pdfs = by_muni[key]
+        quota = max(1, round(remaining * len(pdfs) / pool_left))
+        quota = min(quota, remaining, len(pdfs))
+        sample.extend(rng.sample(pdfs, quota))
+        remaining -= quota
+        pool_left -= len(pdfs)
 
     return sample
+
+
+def load_dept_names(depts_file: Path) -> list[str]:
+    """Carga nombres de departamento desde un JSON con estructura {nodes: [{departmentName, ...}]}."""
+    data = json.loads(depts_file.read_text())
+    return [node["departmentName"] for node in data["nodes"]]

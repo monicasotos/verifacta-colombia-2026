@@ -80,7 +80,8 @@ async def download_all(
     dept_codes: list[str] | None = None,
     limit: int | None = None,
     downloads_dir: Path = DOWNLOADS_DIR,
-    workers: int = 10,
+    workers: int = 3,
+    delay: float = 0.5,
 ) -> dict:
     """
     Descarga todas las actas TRANSMISIÓN disponibles en paralelo.
@@ -126,26 +127,6 @@ async def download_all(
             dc = node["idDepartmentCode"]
             nodes_by_dept.setdefault(dc, []).append(node)
 
-        async def _download_node(node: dict, dept_nombre: str) -> str:
-            filename = node.get("expectedName", "")
-            if not filename:
-                return "failed"
-
-            dest_file = downloads_dir / _folder_name(dept_nombre, node) / filename
-            if dest_file.exists():
-                return "skipped"
-
-            try:
-                async with semaphore:
-                    pdf_bytes = await client.download_pdf(_pdf_path(node))
-                dest_file.parent.mkdir(parents=True, exist_ok=True)
-                dest_file.write_bytes(pdf_bytes)
-                logger.debug(f"✓ {dest_file}")
-                return "downloaded"
-            except Exception as e:
-                logger.warning(f"✗ {filename}: {e}")
-                return "failed"
-
         with Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]{task.description}"),
@@ -153,6 +134,27 @@ async def download_all(
             MofNCompleteColumn(),
             TimeElapsedColumn(),
         ) as progress:
+
+            async def _download_node(node: dict, dept_nombre: str) -> str:
+                filename = node.get("expectedName", "")
+                if not filename:
+                    return "failed"
+
+                dest_file = downloads_dir / _folder_name(dept_nombre, node) / filename
+                if dest_file.exists():
+                    return "skipped"
+
+                try:
+                    async with semaphore:
+                        pdf_bytes = await client.download_pdf(_pdf_path(node))
+                        await asyncio.sleep(delay)
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    dest_file.write_bytes(pdf_bytes)
+                    return "downloaded"
+                except Exception as e:
+                    progress.print(f"[yellow]✗[/] {filename[:16]}… {e}")
+                    return "failed"
+
             dept_task = progress.add_task("Departamentos", total=len(ordered_depts))
 
             for dept_code in ordered_depts:
@@ -174,7 +176,6 @@ async def download_all(
 
                 mesa_task = progress.add_task(f"  {dept_nombre}", total=len(dept_nodes))
 
-                # Lanzar todas las descargas del departamento en paralelo
                 tasks = [
                     asyncio.create_task(_download_node(node, dept_nombre))
                     for node in dept_nodes

@@ -1,0 +1,4 @@
+[flake8]
+max-line-length = 100
+select = E1,E231,E261,E3,F8,F402,F403,F401,W291,W292,W293
+exclude = .claude/,.venv/,downloads/,results/,sample_files/
