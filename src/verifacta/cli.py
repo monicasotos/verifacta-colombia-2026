@@ -11,6 +11,9 @@ from rich.table import Table
 app = typer.Typer(help="Verifacta Colombia 2026 — veeduría de actas E14")
 console = Console()
 
+decretos_app = typer.Typer(help="Decretos presidenciales: Duque, Petro, De la Espriella")
+app.add_typer(decretos_app, name="decretos")
+
 
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.WARNING
@@ -291,6 +294,62 @@ def cleanup(
             pdf.parent.rmdir()
 
     console.print(f"[green]Eliminados {len(corrupted):,} archivos corruptos.[/] Vuelve a correr 'download' para re-descargarlos.")
+
+
+@decretos_app.command("sync-mes")
+def decretos_sync_mes(
+    year: Annotated[int, typer.Option("--year", help="Año (ej: 2018)")],
+    month: Annotated[int, typer.Option("--month", "-m", help="Mes 1-12")],
+    db: Annotated[Path, typer.Option("--db")] = Path("results/decretos.db"),
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """
+    Descarga la metadata (sin PDFs todavía) de los decretos de un mes/año
+    y la guarda en SQLite, mapeada al presidente en funciones esa fecha.
+    """
+    _setup_logging(verbose)
+    from .decretos.client import month_url
+    from .decretos.repository import DecretosRepository
+    from .decretos.sync import sync_month
+
+    repo = DecretosRepository(db)
+    url = month_url(year, month)
+    console.print(f"[bold green]Sincronizando[/] {url}")
+
+    stats = asyncio.run(sync_month(year, month, repo))
+
+    console.print(f"  ✓ Creados: [green]{stats['creados']}[/]")
+    console.print(f"  → Actualizados: [blue]{stats['actualizados']}[/]")
+    if stats["creados"] == 0 and stats["actualizados"] == 0:
+        console.print("  [yellow]Sin decretos encontrados en esa página (¿mes futuro o aún sin publicar?)[/]")
+    console.print(f"  Guardado en: [dim]{db}[/]")
+
+
+@decretos_app.command("stats")
+def decretos_stats(
+    db: Annotated[Path, typer.Option("--db")] = Path("results/decretos.db"),
+) -> None:
+    """Muestra el conteo de decretos guardados por presidente."""
+    _setup_logging(False)
+    from .decretos.repository import DecretosRepository
+
+    if not db.exists():
+        console.print(f"[red]No existe la base de datos {db}. Corre primero 'decretos sync-mes'.[/]")
+        raise typer.Exit(1)
+
+    repo = DecretosRepository(db)
+    counts = repo.counts_por_presidente()
+
+    if not counts:
+        console.print("[yellow]Sin decretos guardados todavía.[/]")
+        return
+
+    table = Table(title=f"Decretos por presidente (total: {repo.total()})")
+    table.add_column("Presidente")
+    table.add_column("Decretos", justify="right")
+    for slug, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        table.add_row(slug, str(count))
+    console.print(table)
 
 
 def main() -> None:
