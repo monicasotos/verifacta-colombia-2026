@@ -88,3 +88,35 @@ scripts/
 ├── 100_municipios_mas_poblados.csv   # referencia para muestreo
 └── allTransmissionCodes.json         # caché local del catálogo (gitignored, ~36MB)
 ```
+
+## Sub-proyecto: Decretos presidenciales
+
+Sub-proyecto independiente dentro del mismo repo: compara el volumen de
+decretos firmados por Duque, Petro y De la Espriella. Plan completo en
+`docs/decretos/PLAN.md` (incluye hallazgos del spike de scraping y fases
+futuras — dashboard Streamlit, clasificación por tipo).
+
+```bash
+# Metadata (sin PDFs todavía) de un mes/año, mapeada al presidente por fecha de firma
+uv run verifacta decretos sync-mes --year 2018 --month 8
+
+# Conteo de decretos guardados por presidente
+uv run verifacta decretos stats
+```
+
+```
+src/verifacta/decretos/
+├── models.py        # Pydantic: Presidente, Decreto
+├── presidentes.py    # periodos presidenciales + presidente_para_fecha(fecha)
+├── client.py         # DecretosClient (Playwright) + parse_decretos_html() (BeautifulSoup, pura)
+├── repository.py     # SQLite (results/decretos.db) — tabla `decretos`, upsert por (anio, numero)
+└── sync.py           # orquesta: client -> mapeo a presidente -> repository
+```
+
+**Fuente**: `dapre.presidencia.gov.co/normativa/decretos-{año}/decretos-{mes}-{año}`
+(patrón de URL determinístico). Protegida por F5 Bot Defense — un Chromium
+real vía Playwright pasa el challenge de forma consistente; `httpx`/`curl`
+planos no. La numeración de decretos reinicia cada año, así que la clave
+natural es `(anio, numero)`, no `numero` solo.
+
+**PDFs** (a partir de la fase de descarga masiva): `decretos/{presidente_slug}/{anio}/{numero}.pdf`.
