@@ -325,6 +325,73 @@ def decretos_sync_mes(
     console.print(f"  Guardado en: [dim]{db}[/]")
 
 
+@decretos_app.command("sync")
+def decretos_sync(
+    presidente: Annotated[str, typer.Option("--presidente", help="duque | petro | de-la-espriella")],
+    db: Annotated[Path, typer.Option("--db")] = Path("results/decretos.db"),
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Sincroniza la metadata de TODOS los meses del periodo de un presidente (sin PDFs)."""
+    _setup_logging(verbose)
+    from datetime import date
+
+    from .decretos.client import DecretosClient
+    from .decretos.presidentes import meses_del_periodo, presidente_por_slug
+    from .decretos.repository import DecretosRepository
+    from .decretos.sync import sync_months
+
+    p = presidente_por_slug(presidente)
+    meses = meses_del_periodo(p, hasta=date.today())
+
+    if not meses:
+        console.print(f"[yellow]Sin meses para sincronizar todavía[/] (posesión: {p.fecha_inicio}).")
+        return
+
+    repo = DecretosRepository(db)
+    console.print(f"[bold green]Sincronizando[/] {p.nombre}: [yellow]{len(meses)}[/] meses")
+
+    async def _run():
+        async with DecretosClient() as client:
+            return await sync_months(client, meses, repo)
+
+    totals = asyncio.run(_run())
+
+    console.print(f"  ✓ Creados: [green]{totals['creados']}[/]")
+    console.print(f"  → Actualizados: [blue]{totals['actualizados']}[/]")
+    console.print(f"  Guardado en: [dim]{db}[/]")
+
+
+@decretos_app.command("download-pdfs")
+def decretos_download_pdfs(
+    db: Annotated[Path, typer.Option("--db")] = Path("results/decretos.db"),
+    output: Annotated[Path, typer.Option("--output", "-o", help="Carpeta de persistencia de PDFs")] = Path("decretos"),
+    presidente: Annotated[str | None, typer.Option("--presidente")] = None,
+    limit: Annotated[int | None, typer.Option("--limit", help="Máximo de PDFs a descargar")] = None,
+    workers: Annotated[int, typer.Option("--workers", "-w", help="Descargas en paralelo (máx 3-5 para evitar bloqueo)")] = 3,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Descarga los PDFs de los decretos ya indexados (corre 'sync-mes'/'sync' primero)."""
+    _setup_logging(verbose)
+    from .decretos.downloader import download_all
+    from .decretos.repository import DecretosRepository
+
+    if not db.exists():
+        console.print(f"[red]No existe {db}. Corre primero 'decretos sync-mes' o 'decretos sync'.[/]")
+        raise typer.Exit(1)
+
+    repo = DecretosRepository(db)
+    console.print(f"[bold green]Descargando PDFs[/] → {output}")
+
+    stats = asyncio.run(download_all(
+        repo, base_dir=output, workers=workers, presidente_slug=presidente, limit=limit,
+    ))
+
+    console.print(f"  ✓ Descargados: [green]{stats['downloaded']}[/]")
+    console.print(f"  → Saltados (ya existían): [blue]{stats['skipped']}[/]")
+    console.print(f"  ✗ Fallidos: [red]{stats['failed']}[/]")
+    console.print(f"  Guardado en: [dim]{output}[/]")
+
+
 @decretos_app.command("stats")
 def decretos_stats(
     db: Annotated[Path, typer.Option("--db")] = Path("results/decretos.db"),

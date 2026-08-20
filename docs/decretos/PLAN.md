@@ -164,11 +164,30 @@ real. Cada uno con su propio `Repository`.
   - `sync-mes --year 2026 --month 8` → 0 decretos, sin error (la página
     existe pero está vacía — esperado, ver nota sobre De la Espriella en la
     sección 6).
-- **PR2 — Descarga y persistencia de PDFs a escala completa.** Downloader
-  paralelo con reintentos/skip idempotente (mismo patrón que
-  `scraper/downloader.py`), corrido sobre los periodos completos de Duque y
-  Petro, y lo disponible de De la Espriella. Aquí es donde vemos volumen real
-  y costo/tiempo.
+- **PR2 — Descarga y persistencia de PDFs.** ✅ Código completo y validado a
+  pequeña escala; **falta correr la barrida histórica completa** (queda como
+  siguiente paso, ver sección 6).
+  - `client.download_pdf()`: reusa las cookies de sesión que ya dejó
+    `fetch_month` al pasar el challenge — confirmado por spike que
+    `context.request.get()` funciona directo sin abrir una página por PDF
+    (mucho más rápido que Playwright completo por archivo).
+  - `downloader.download_all()`: descarga en paralelo (semáforo, default 3
+    workers) los decretos sin `path_local` en el repo. Doble idempotencia:
+    filtra en SQL los que ya tienen `path_local`, y además chequea si el
+    archivo ya existe en disco (por si la DB quedó desincronizada) — ambos
+    caminos verificados con datos reales.
+  - **Orden: del más reciente al más antiguo** (a pedido explícito), tanto
+    en `meses_del_periodo()` (sync de metadata) como en
+    `pendientes_de_descarga()` (cola de descarga de PDFs) — así una corrida
+    parcial o con `--limit` deja lo más reciente ya disponible primero.
+  - `decretos sync --presidente <slug>`: sincroniza metadata de **todos**
+    los meses del periodo (antes solo había `sync-mes` para un mes suelto),
+    reusando un solo browser Playwright en vez de uno por mes.
+  - `decretos download-pdfs [--presidente] [--limit] [--workers]`: descarga
+    los PDFs pendientes. `decretos/{presidente_slug}/{anio}/{numero}.pdf`.
+  - Validado end-to-end: sync de agosto 2018 (158 decretos) → descarga de 5
+    PDFs reales → verificado que un segundo run no re-descarga (ni por DB ni
+    por disco, probados los dos casos por separado).
 - **PR3 — Comando de stats en CLI.** Conteos por presidente agregados por
   semana/mes/trimestre desde SQLite (sin UI todavía) — esto es la base de
   datos exacta que va a consumir el gráfico de Streamlit, así que separarlo

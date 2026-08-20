@@ -72,6 +72,30 @@ class DecretosRepository:
             session.commit()
         return stats
 
+    def set_path_local(self, anio: int, numero: int, path: str) -> None:
+        """Marca un decreto como descargado, con su ruta local y timestamp."""
+        with Session(self._engine) as session:
+            record = session.query(DecretoRecord).filter_by(anio=anio, numero=numero).first()
+            if record is None:
+                return
+            record.path_local = path
+            record.fecha_descarga = datetime.now(timezone.utc)
+            session.commit()
+
+    def pendientes_de_descarga(self, presidente_slug: str | None = None) -> list[DecretoRecord]:
+        """
+        Decretos con metadata pero sin PDF descargado todavía, del más
+        reciente al más antiguo (con --limit, prioriza lo más reciente).
+        """
+        with Session(self._engine) as session:
+            session.expire_on_commit = False
+            q = session.query(DecretoRecord).filter(
+                (DecretoRecord.path_local.is_(None)) | (DecretoRecord.path_local == "")
+            )
+            if presidente_slug:
+                q = q.filter_by(presidente_slug=presidente_slug)
+            return q.order_by(DecretoRecord.fecha_firma.desc()).all()
+
     def counts_por_presidente(self) -> dict[str, int]:
         with Session(self._engine) as session:
             rows = (

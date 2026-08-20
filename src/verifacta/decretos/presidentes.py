@@ -53,3 +53,35 @@ def presidente_por_slug(slug: str) -> Presidente:
         return _POR_SLUG[slug]
     except KeyError:
         raise ValueError(f"Presidente desconocido: {slug!r}. Opciones: {list(_POR_SLUG)}")
+
+
+def meses_del_periodo(
+    presidente: Presidente, hasta: date | None = None, mas_reciente_primero: bool = True,
+) -> list[tuple[int, int]]:
+    """
+    Genera pares (año, mes) del periodo, desde el inicio hasta el fin (o
+    `hasta`, para no pedir meses futuros que la fuente aún no publicó).
+
+    Por defecto retorna del más reciente al más antiguo: al descargar, nos
+    importa más ver primero los decretos recientes que barrer todo el
+    histórico en orden cronológico — así una corrida parcial (o con
+    `--limit`) ya deja lo más útil descargado.
+
+    Si el periodo empieza después de `hasta` (ej. un presidente que todavía
+    no toma posesión), retorna lista vacía en vez de fallar.
+    """
+    fin = presidente.fecha_fin or hasta or date.today()
+    fin = min(fin, hasta) if hasta else fin
+    inicio = presidente.fecha_inicio
+    if inicio > fin:
+        return []
+
+    meses = []
+    anio, mes = inicio.year, inicio.month
+    while (anio, mes) <= (fin.year, fin.month):
+        meses.append((anio, mes))
+        mes += 1
+        if mes > 12:
+            mes = 1
+            anio += 1
+    return list(reversed(meses)) if mas_reciente_primero else meses

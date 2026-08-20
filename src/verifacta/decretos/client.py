@@ -20,6 +20,7 @@ from datetime import date
 
 from bs4 import BeautifulSoup
 from playwright.async_api import Browser, BrowserContext, async_playwright
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -127,3 +128,23 @@ class DecretosClient:
         finally:
             await page.close()
         return parse_decretos_html(html)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def download_pdf(self, url: str) -> bytes:
+        """
+        Descarga el PDF de un decreto.
+
+        No abre una página nueva: reusa las cookies de sesión que ya dejó
+        `fetch_month` al pasar el challenge de F5 (confirmado por spike que
+        `context.request` funciona directo, sin re-renderizar). Por eso
+        siempre hay que llamar a `fetch_month` al menos una vez en el mismo
+        cliente antes de descargar PDFs.
+        """
+        assert self._context is not None, "usar dentro de 'async with DecretosClient()'"
+        resp = await self._context.request.get(url)
+        if resp.status != 200:
+            raise ValueError(f"status {resp.status} descargando {url}")
+        body = await resp.body()
+        if not body.startswith(b"%PDF"):
+            raise ValueError(f"Contenido no es PDF (posible bloqueo del challenge) — {url}")
+        return body
